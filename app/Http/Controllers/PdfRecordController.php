@@ -839,20 +839,71 @@ class PdfRecordController extends Controller
     {
         $cols = self::COPAY_COLS;
 
-        // Row 1: Total Health Care Institution Fees
-        foreach (['copay_hci_actual', 'copay_hci_discount', 'copay_hci_benefit'] as $i => $key) {
-            $this->centered($pdf, $cols[$i], self::COPAY_HCI_Y, $this->plainAmount($d[$key] ?? ''));
-        }
-        [$x, $y, $w] = self::COPAY_HCI_AMT;
-        $this->txt($pdf, $x, $y, $this->plainAmount($d['copay_hci_amount'] ?? ''), 10, $w);
-        $this->check($pdf, self::COPAY_HCI_OTHERS[0], self::COPAY_HCI_OTHERS[1]);   // "Others" always checked
+        // Check whether any of the three HCI fields has a value
+        $hciFields = [
+            'copay_hci_actual',
+            'copay_hci_discount',
+            'copay_hci_benefit',
+        ];
 
-        // Row 2: Total Professional Fees (always N/A)
-        foreach ($cols as $cx) {
-            $this->centered($pdf, $cx, self::COPAY_PF_Y, 'N/A');
+        $hasHciValue = false;
+
+        // Row 1: Total Health Care Institution Fees
+        foreach ($hciFields as $i => $key) {
+            $value = trim((string) ($d[$key] ?? ''));
+
+            if ($value !== '') {
+                $hasHciValue = true;
+            }
+
+            $this->centered(
+                $pdf,
+                $cols[$i],
+                self::COPAY_HCI_Y,
+                $value !== '' ? $this->plainAmount($value) : ''
+            );
         }
-        [$x, $y, $w] = self::COPAY_PF_AMT;
-        $this->txt($pdf, $x, $y, 'N/A', 10, $w);
+
+        // HCI Amount
+        [$x, $y, $w] = self::COPAY_HCI_AMT;
+        $hciAmount = trim((string) ($d['copay_hci_amount'] ?? ''));
+
+        if ($hciAmount !== '') {
+            $this->txt(
+                $pdf,
+                $x,
+                $y,
+                $this->plainAmount($hciAmount),
+                10,
+                $w
+            );
+        }
+
+        // Others checkbox: show only if at least one HCI field has a value
+        if ($hasHciValue) {
+            $this->check(
+                $pdf,
+                self::COPAY_HCI_OTHERS[0],
+                self::COPAY_HCI_OTHERS[1]
+            );
+        }
+
+        // Row 2: Total Professional Fees
+        // Show N/A only if at least one of the three HCI fields has a value
+        if ($hasHciValue) {
+            foreach ($cols as $cx) {
+                $this->centered(
+                    $pdf,
+                    $cx,
+                    self::COPAY_PF_Y,
+                    'N/A'
+                );
+            }
+
+            [$x, $y, $w] = self::COPAY_PF_AMT;
+
+            $this->txt($pdf, $x, $y, 'N/A', 10, $w);
+        }
     }
 
     /** Numbers get two decimals (1,234.50); any other text is printed as typed. */
