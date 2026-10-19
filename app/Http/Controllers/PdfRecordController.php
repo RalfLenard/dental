@@ -193,9 +193,13 @@ class PdfRecordController extends Controller
             'form_data' => ['required', 'array'],
         ]);
 
+        // The name shown in the records table is ALWAYS rebuilt from the current form data.
+        // (The form sends back the old saved patient_name, so trusting it kept the stale name.)
         $fd = $this->resolve($data['form_data']);
-        $data['patient_name'] = $data['patient_name']
-            ?: trim(($fd['patient_last_name'] ?? '') . ', ' . ($fd['patient_first_name'] ?? ''), ' ,') ?: null;
+        $data['patient_name'] = trim(
+            trim((string) ($fd['patient_last_name'] ?? '')) . ', ' . trim((string) ($fd['patient_first_name'] ?? '')),
+            ' ,'
+        ) ?: null;
 
         return $data;
     }
@@ -436,7 +440,6 @@ class PdfRecordController extends Controller
         $this->signedDate($pdf, 1295, $d['date_discharged'] ?? '', self::SIGNED, 11, true);
     }
 
-    /** Annex E page 1 (dental claim form): Parts I to IV. Part V and VI are on the next page. */
     /** Annex E page 1 (dental claim form): Parts I to IV. Part V and VI are on the next page. */
     private function pageAnnexE1(Fpdi $pdf, array $d): void
     {
@@ -834,7 +837,7 @@ class PdfRecordController extends Controller
         }
     }
 
-    /** Part III-A second table: row 1 is free input (Others always checked), row 2 is always N/A. */
+    /** Part III-A second table: row 1 is free input (Others checked only when a value exists), row 2 is N/A in that case. */
     private function copayTable(Fpdi $pdf, array $d): void
     {
         $cols = self::COPAY_COLS;
