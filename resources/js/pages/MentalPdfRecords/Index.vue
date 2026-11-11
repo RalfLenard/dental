@@ -112,8 +112,8 @@ const blankData = () => ({
     representative_reason_other: '',
 
     // CSF Part IV - health care professional
-    professional_accreditation: '2000-1636682-2',
-    professional_name: 'HAROLD P. DELA VEGA',
+    professional_accreditation: '1501-1638387-1',
+    professional_name: 'DR. GLADYS LOURDES BENGCO, M.D.',
 
     // CF-2 page 3 (item 10) health care professional
     cf2_professional_accreditation: '1501-1638387-1',
@@ -140,6 +140,7 @@ const blankData = () => ({
     j1_creatinine: false,
     j1_cxr: false,
     j1_medicines: false,
+    j1_medicines_list: '',
     j1_follow_ups: Array.from({ length: 6 }, () => ''),
 
     // Annex K (Satisfaction questionnaire)
@@ -739,6 +740,9 @@ function save() {
 
                     <label class="flex items-center gap-2 text-sm">
                         <input v-model="form.form_data.j1_medicines" type="checkbox" /> Medicines provided (also ticked when Annex D lists a medicine)
+                    </label>
+                    <label v-if="form.form_data.j1_medicines" class="block text-sm">Name of medicine/s provided
+                        <input v-model="form.form_data.j1_medicines_list" placeholder="e.g. FLUOXETINE 20 MG, RISPERIDONE 2 MG" class="mt-1 w-full rounded border p-2" />
                     </label>
 
                     <h3 class="pt-1 text-sm font-semibold">Follow-up visits for psychoeducation and psychosocial support (optional override)</h3>

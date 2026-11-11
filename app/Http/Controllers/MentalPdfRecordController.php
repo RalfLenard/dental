@@ -33,8 +33,8 @@ class MentalPdfRecordController extends Controller
 
     /** Fixed values used when the field is left empty. */
     private const DEFAULTS = [
-        'professional_accreditation' => '2000-1636682-2',
-        'professional_name' => 'HAROLD P. DELA VEGA',
+        'professional_accreditation' => '1501-1638387-1',
+        'professional_name' => 'DR. GLADYS LOURDES BENGCO, M.D.',
 
         // CF-2 page 3 (item 10) health care professional
         'cf2_professional_accreditation' => '1501-1638387-1',
@@ -171,6 +171,7 @@ class MentalPdfRecordController extends Controller
     private const AJ_PIN_Y = 350;
     private const AJ_MEMBER_NAME = [213, 441, 600];
     private const AJ_MEMBER_PIN_Y = 464;
+    private const AJ_MEDS = [305, 976.5, 515];
 
     private const AJ_BOX = [
         'screening' => [99.5, 638],
@@ -710,6 +711,15 @@ class MentalPdfRecordController extends Controller
         }
         if ($on('medicines') || $hasMeds) {
             $this->check($pdf, ...self::AJ_BOX['medicines']);
+
+            // Typed medicine names win; otherwise use the names listed in Annex D
+            $list = trim((string) ($d['j1_medicines_list'] ?? ''));
+            if ($list === '') {
+                $list = implode(', ', array_filter(array_map(fn($r) => $r['name'], $d['medications'])));
+            }
+
+            [$x, $y, $w] = self::AJ_MEDS;
+            $this->txt($pdf, $x, $y, $list, 10, $w);
         }
 
         foreach ($dates as $i => $date) {
