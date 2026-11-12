@@ -149,7 +149,8 @@ class MentalPdfRecordController extends Controller
     private const AH_COL_FROM = [556, 150];
     private const AH_COL_TO = [722, 160];
     private const AH_COL_CODE = [884, 145];
-    private const AH_COL_REMARKS = [1046, 160];
+    private const AH_COL_REMARKS = [1048, 150];
+    private const AH_ROWS = 5;
 
     private const AH_SIGN_NAME = [100, 670, 245];
     private const AH_SIGN_DESIG = [360, 677, 245];
@@ -247,9 +248,11 @@ class MentalPdfRecordController extends Controller
     /** Live nudges for page 3 (px). Override in the URL: ?acc_dy=-2&date_dy=-3&name_dy=-4 */
     private array $nudge = ['acc' => self::CF2B_ACCRED_DY, 'date' => self::CF2B_DATE_DY, 'name' => self::CF2B_NAME_DY];
 
-    private function listing()
+   private function listing()
     {
-        return MentalPdfRecord::query()->latest()->limit(100)
+        return MentalPdfRecord::query()
+            ->with('mhg2:id,mental_pdf_record_id,updated_at')
+            ->latest()->limit(100)
             ->get(['id', 'record_no', 'patient_name', 'created_at']);
     }
 
@@ -265,7 +268,7 @@ class MentalPdfRecordController extends Controller
     {
         return Inertia::render('MentalPdfRecords/Index', [
             'records' => $this->listing(),
-            'record' => $record,
+            'record' => $record->load('mhg2'),
         ]);
     }
 
@@ -654,7 +657,7 @@ class MentalPdfRecordController extends Controller
         [$xc, $w] = self::AH_COL_CODE;
         $this->centered($pdf, $xc, $y, $d['first_case_rate'] ?? '', 10, $w);
         [$xc, $w] = self::AH_COL_REMARKS;
-        $this->centered($pdf, $xc, $y, $d['h_remarks'] ?? '', 9, $w);
+        $this->remarksColumn($pdf, $d['h_remarks'] ?? '');
 
         // Certified correct by the authorized representative of the HF
         [$x, $yy, $w] = self::AH_SIGN_NAME;
@@ -663,6 +666,67 @@ class MentalPdfRecordController extends Controller
         $this->txt($pdf, $x, $yy, $d['hci_rep_designation'] ?? '', 10, $w);
         [$x, $yy, $w] = self::AH_SIGN_DATE;
         $this->txt($pdf, $x, $yy, $this->mdySlash($d['date_discharged'] ?? ''), 10, $w);
+    }
+
+    /**
+     * Remarks: wrapped inside the Remarks column, one line per table row (rows 1 to 5).
+     * The font shrinks (8pt down to 5.5pt) until everything fits in 5 lines.
+     */
+    private function remarksColumn(Fpdi $pdf, ?string $text): void
+    {
+        $text = mb_strtoupper(trim(preg_replace('/\s+/', ' ', (string) $text)));
+        if ($text === '') {
+            return;
+        }
+
+        [$xc, $w] = self::AH_COL_REMARKS;
+        $limit = $w * $this->k;
+        $lines = [];
+
+        for ($size = 8.0; $size >= 5.5; $size -= 0.5) {
+            $pdf->SetFont('helvetica', '', $size);
+            $lines = $this->breakLongWords($pdf, $this->breakWords($pdf, $text, $limit), $limit);
+            if (count($lines) <= self::AH_ROWS) {
+                break;
+            }
+        }
+
+        // Still too long at the smallest size: keep 5 lines, the last one takes the rest (shrunk to fit)
+        if (count($lines) > self::AH_ROWS) {
+            $rest = implode(' ', array_slice($lines, self::AH_ROWS - 1));
+            $lines = array_slice($lines, 0, self::AH_ROWS - 1);
+            $lines[] = $rest;
+        }
+
+        foreach ($lines as $i => $line) {
+            $yc = self::AH_ROW_Y0 + self::AH_ROW_DY * $i;
+            $this->put($pdf, ($xc - $w / 2) * $this->k, $yc * $this->k, $limit, $line, 'C', 1);
+        }
+    }
+
+    /** Split any single word that is wider than the limit (e.g. a very long unbroken string). */
+    private function breakLongWords(Fpdi $pdf, array $lines, float $limitMm): array
+    {
+        $out = [];
+        foreach ($lines as $line) {
+            if ($pdf->GetStringWidth($line) <= $limitMm) {
+                $out[] = $line;
+                continue;
+            }
+            $cur = '';
+            foreach (mb_str_split($line) as $ch) {
+                if ($cur !== '' && $pdf->GetStringWidth($cur . $ch) > $limitMm) {
+                    $out[] = $cur;
+                    $cur = '';
+                }
+                $cur .= $ch;
+            }
+            if ($cur !== '') {
+                $out[] = $cur;
+            }
+        }
+
+        return $out;
     }
 
     /** Annex J.1 (Checklist of Mandatory and Other Services, Tranche 1): PDF page 6. */

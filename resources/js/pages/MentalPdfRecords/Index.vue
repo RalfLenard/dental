@@ -219,10 +219,74 @@ const withDefaults = (saved) => {
     return merged
 }
 
+// ---- MHG2 (Tranche 2) ----------------------------------------------------
+const blankMhg2 = () => ({
+    z_benefit_code: 'MHG02',
+    rvs_code: 'MHG02',
+    h_package_code: 'MHG2',
+    h_remarks: '',
+    h_rows: [{ case_no: '', patient_pin: '', date_from: '', date_to: '', package_code: 'MHG2', remarks: '' }],
+    j2_follow_ups: Array.from({ length: 6 }, () => ''),
+    // Annex C (Mental Health Registry), MHG2 only. Empty = automatic.
+    c_diagnosis: '',
+    c_diagnostics: '',
+    c_medications: '',
+    c_physician: '',
+    // Annex D follow-up visits and medications, MHG2 only. Start blank (not copied from tranche 1).
+    d_follow_ups: blankFollowUps(),
+    d_medications: blankMeds(),
+    // CF-2 page 3 Part III-A charges, MHG2 only. Start blank (not copied from tranche 1).
+    hci_charges: '',
+    copay_hci_actual: '',
+    copay_hci_discount: '',
+    copay_hci_benefit: '',
+    copay_hci_amount: '',
+})
+
+const withMhg2Defaults = (saved) => {
+    const base = blankMhg2()
+    const merged = { ...base, ...(saved ?? {}) }
+    for (const k of ['z_benefit_code', 'rvs_code', 'h_package_code']) {
+        if (!merged[k]) merged[k] = base[k]
+    }
+    for (const k of ['c_diagnosis', 'c_diagnostics', 'c_medications', 'c_physician',
+        'hci_charges', 'copay_hci_actual', 'copay_hci_discount', 'copay_hci_benefit', 'copay_hci_amount']) {
+        merged[k] = merged[k] ?? ''
+    }
+    const fu = Array.isArray(saved?.j2_follow_ups) ? saved.j2_follow_ups : []
+    merged.j2_follow_ups = Array.from({ length: 6 }, (_, i) => fu[i] ?? '')
+    const legacy = props.record?.form_data ?? {}
+
+    // Annex D follow-up visits: only what was saved for MHG2, always 12 rows
+    const dfu = Array.isArray(saved?.d_follow_ups) ? saved.d_follow_ups : []
+    merged.d_follow_ups = Array.from({ length: 12 }, (_, i) => ({ visit: '', next: '', ...(dfu[i] ?? {}) }))
+    // Annex D medications: only what was saved for MHG2, always 7 rows
+    const dmeds = Array.isArray(saved?.d_medications) ? saved.d_medications : []
+    merged.d_medications = Array.from({ length: 7 }, (_, i) => ({ name: '', dosage: '', preparation: '', date: '', ...(dmeds[i] ?? {}) }))
+
+    const rows = Array.isArray(saved?.h_rows) ? saved.h_rows.slice(0, 5) : []
+    const legacyPin = legacy.relationship_to_member === 'Member' ? legacy.member_pin : legacy.dependent_pin
+    merged.h_rows = rows.length
+        ? rows.map((row) => ({ case_no: '', patient_pin: '', date_from: '', date_to: '', package_code: merged.h_package_code, remarks: '', ...row }))
+        : [{
+            case_no: legacy.case_no ?? '', patient_pin: legacyPin ?? '',
+            date_from: legacy.date_admitted ?? '', date_to: legacy.date_discharged ?? '',
+            package_code: merged.h_package_code, remarks: merged.h_remarks,
+        }]
+    return merged
+}
+
 const form = useForm({
     patient_name: props.record?.patient_name ?? '',
     form_data: withDefaults(props.record?.form_data),
 })
+
+const mhg2Form = useForm({
+    form_data: withMhg2Defaults(props.record?.mhg2?.form_data),
+})
+
+// Active tab: 'main' = Tranche 1 form + PDF, 'mhg2' = MHG2 form + PDF
+const tab = ref('main')
 
 // ---- Modal -------------------------------------------------------------
 const showModal = ref(!!props.record)
@@ -230,6 +294,8 @@ const showModal = ref(!!props.record)
 watch(() => props.record, (record) => {
     form.patient_name = record?.patient_name ?? ''
     form.form_data = withDefaults(record?.form_data)
+    mhg2Form.form_data = withMhg2Defaults(record?.mhg2?.form_data)
+    if (!record?.mhg2) tab.value = 'main'
     form.clearErrors()
     showModal.value = !!record
 })
@@ -302,12 +368,83 @@ const previewUrl = computed(() =>
         : null
 )
 
+const mhg2PreviewUrl = computed(() =>
+    props.record?.mhg2
+        ? `${BASE}/${props.record.id}/mhg2/preview?v=${encodeURIComponent(props.record.mhg2.updated_at ?? '')}-${stamp.value}`
+        : null
+)
+
+const activePreview = computed(() =>
+    tab.value === 'mhg2' && mhg2PreviewUrl.value ? mhg2PreviewUrl.value : previewUrl.value
+)
+
 function save() {
     if (props.record?.id) {
         form.put(`${BASE}/${props.record.id}`, { onSuccess: () => { stamp.value = Date.now() } })
     } else {
         form.post(BASE)
     }
+}
+
+// Create the MHG2 (Tranche 2) continuation for a record
+const addMhg2 = (id) => router.post(`${BASE}/${id}/mhg2`, {}, {
+    preserveScroll: true,
+    onSuccess: () => { tab.value = 'mhg2' },
+})
+
+// Save the record (new or existing), then add MHG2 to it
+function saveAndAddMhg2() {
+    const after = (page) => {
+        const id = page.props.record?.id
+        if (id) addMhg2(id)
+    }
+    if (props.record?.id) {
+        form.put(`${BASE}/${props.record.id}`, { preserveScroll: true, onSuccess: after })
+    } else {
+        form.post(BASE, { preserveScroll: true, onSuccess: after })
+    }
+}
+
+// Read-only Tranche 1 details shown at the top of the MHG2 form
+const t1Summary = computed(() => {
+    const f = form.form_data
+    const member = f.relationship_to_member === 'Member'
+    const patient = member
+        ? [f.member_last_name, f.member_first_name, f.member_middle_name].filter(Boolean).join(', ')
+        : [f.patient_last_name, f.patient_first_name, f.patient_middle_name].filter(Boolean).join(', ')
+    return {
+        patient,
+        pin: member ? f.member_pin : f.dependent_pin,
+        caseNo: f.case_no,
+        period: f.date_admitted || f.date_discharged ? `${f.date_admitted || '?'} to ${f.date_discharged || '?'}` : '',
+    }
+})
+
+function addAnnexHRow() {
+    if (mhg2Form.form_data.h_rows.length >= 5) return
+    mhg2Form.form_data.h_rows.push({
+        case_no: '', patient_pin: '', date_from: '', date_to: '',
+        package_code: mhg2Form.form_data.h_package_code || 'MHG2', remarks: '',
+    })
+}
+
+function removeAnnexHRow(index) {
+    if (mhg2Form.form_data.h_rows.length <= 1) return
+    mhg2Form.form_data.h_rows.splice(index, 1)
+}
+
+// Changing the Annex H package code updates every row that still used the old code (or none)
+watch(() => mhg2Form.form_data.h_package_code, (code, old) => {
+    for (const row of mhg2Form.form_data.h_rows) {
+        if (!row.package_code || row.package_code === old) row.package_code = code
+    }
+})
+
+function saveMhg2() {
+    mhg2Form.put(`${BASE}/${props.record.id}/mhg2`, {
+        preserveScroll: true,
+        onSuccess: () => { stamp.value = Date.now() },
+    })
 }
 </script>
 
@@ -319,7 +456,7 @@ function save() {
      <main class="w-full space-y-6 px-6">
         <header class="flex flex-wrap items-center justify-between gap-3">
             <div>
-                <h1 class="text-2xl font-bold">PhilHealth Mental Health: CSF + CF-2 + Annexes D, H, J.1, K, L.1</h1>
+                <h1 class="text-2xl font-bold">PhilHealth Mental Health: CSF + CF-2 + Annexes C (MHG2), D, H, J.1/J.2, K, L.1/L.2</h1>
                 <p class="text-sm text-gray-500">Standalone PDF form system</p>
             </div>
             <button type="button" @click="openNew" class="rounded bg-blue-700 px-4 py-2 font-semibold text-white hover:bg-blue-800">
@@ -360,6 +497,14 @@ function save() {
                                     <a :href="`${BASE}/${item.id}/preview`" target="_blank" class="rounded bg-gray-800 px-3 py-1 text-white hover:bg-gray-900">
                                         PDF
                                     </a>
+                                    <a v-if="item.mhg2" :href="`${BASE}/${item.id}/mhg2/preview`" target="_blank"
+                                       class="rounded bg-emerald-700 px-3 py-1 text-white hover:bg-emerald-800">
+                                        MHG2 PDF
+                                    </a>
+                                    <button v-else type="button" @click="addMhg2(item.id)"
+                                            class="rounded border border-emerald-700 px-3 py-1 text-emerald-700 hover:bg-emerald-50">
+                                        + MHG2
+                                    </button>
                                 </div>
                             </td>
                         </tr>
@@ -384,9 +529,24 @@ function save() {
                     <button type="button" @click="closeModal" class="rounded px-3 py-1 text-xl leading-none text-gray-500 hover:bg-gray-100" aria-label="Close">&times;</button>
                 </div>
 
+                <!-- Tabs: Tranche 1 form / MHG2 form (shown once MHG2 is added) -->
+                <div v-if="record?.mhg2" class="flex gap-1 border-b bg-gray-50 px-5 pt-2">
+                    <button type="button" @click="tab = 'main'"
+                            :class="tab === 'main' ? 'border-x border-t bg-white font-semibold text-gray-900' : 'text-gray-500 hover:text-gray-800'"
+                            class="-mb-px rounded-t px-4 py-2 text-sm">
+                        Tranche 1 (MHG1) form
+                    </button>
+                    <button type="button" @click="tab = 'mhg2'"
+                            :class="tab === 'mhg2' ? 'border-x border-t border-emerald-600 bg-white font-semibold text-emerald-800' : 'text-gray-500 hover:text-emerald-800'"
+                            class="-mb-px rounded-t px-4 py-2 text-sm">
+                        MHG2 (Tranche 2) form
+                    </button>
+                </div>
+
                 <div class="overflow-y-auto p-5">
         <div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px]">
-            <form @submit.prevent="save" class="space-y-6 rounded-xl border p-5">
+            <!-- ================= TRANCHE 1 FORM ================= -->
+            <form v-if="tab === 'main' || !record?.mhg2" @submit.prevent="save" class="space-y-6 rounded-xl border p-5">
                 <!-- CSF PART I : member -->
                 <section class="space-y-3">
                     <h2 class="text-lg font-semibold">CSF Part I — Member information</h2>
@@ -409,7 +569,7 @@ function save() {
                         <label class="text-sm">Member middle name
                             <input v-model="form.form_data.member_middle_name" class="mt-1 w-full rounded border p-2" />
                         </label>
-                        <label class="text-sm">Member sex (Annex D, J.1, L.1)
+                        <label class="text-sm">Member sex (Annex C, D, J.1, L.1)
                             <select v-model="form.form_data.member_sex" class="mt-1 w-full rounded border p-2">
                                 <option value="">Select</option>
                                 <option value="Male">Male</option>
@@ -457,7 +617,7 @@ function save() {
                             <label class="text-sm">Patient middle name
                                 <input v-model="form.form_data.patient_middle_name" class="mt-1 w-full rounded border p-2" />
                             </label>
-                            <label class="text-sm">Patient sex (Annex D, J.1, L.1)
+                            <label class="text-sm">Patient sex (Annex C, D, J.1, L.1)
                                 <select v-model="form.form_data.patient_sex" class="mt-1 w-full rounded border p-2">
                                     <option value="">Select</option>
                                     <option value="Male">Male</option>
@@ -624,7 +784,7 @@ function save() {
                         </label>
                     </div>
                     <p class="text-xs text-gray-500">
-                        This professional is also the attending physician on Annex J.1 and Annex L.1.
+                        This professional is also the attending physician on Annex C (MHG2), J.1 and L.1.
                     </p>
                 </section>
 
@@ -722,7 +882,7 @@ function save() {
                         Tick the services that were done. "Diagnostics" is ticked automatically when any test below is ticked.
                         Follow-up visits and "Medicines provided" are ticked automatically from Annex D. Follow-up dates left
                         empty are copied from the Annex D "date of visit" with the same number. The attending physician is the
-                        CF-2 page 3 professional.
+                        CF-2 page 3 professional. The ticked tests also feed Annex C of the MHG2 PDF.
                     </p>
 
                     <div class="grid gap-2 sm:grid-cols-2">
@@ -824,15 +984,229 @@ function save() {
                     <button :disabled="form.processing" class="rounded bg-blue-700 px-5 py-2 font-semibold text-white disabled:opacity-50">
                         {{ form.processing ? 'Saving…' : (record ? 'Update record' : 'Save record') }}
                     </button>
+                    <button v-if="!record?.mhg2" type="button" :disabled="form.processing" @click="saveAndAddMhg2"
+                            class="rounded border border-emerald-700 px-5 py-2 font-semibold text-emerald-700 disabled:opacity-50">
+                        {{ record ? 'Update & add MHG2' : 'Save & add MHG2' }}
+                    </button>
                     <button type="button" @click="closeModal" class="rounded border px-5 py-2">Close</button>
                 </div>
             </form>
 
-            <aside class="space-y-4 lg:sticky lg:top-0 lg:self-start">
+            <!-- ================= MHG2 (TRANCHE 2) FORM ================= -->
+            <form v-if="record?.mhg2 && tab === 'mhg2'" @submit.prevent="saveMhg2" class="space-y-6 rounded-xl border-2 border-emerald-600 p-5">
+                <section class="space-y-3">
+                    <h2 class="text-lg font-semibold text-emerald-800">MHG2 (Tranche 2) — edit form</h2>
+                    <p class="rounded bg-emerald-50 p-3 text-sm text-emerald-900">
+                        Everything on this tab is saved to MHG2 only and never changes Tranche 1. The patient, member,
+                        facility, confinement dates, Annex K and the head of facility are taken from the
+                        Tranche 1 tab. Change those there.
+                    </p>
+                    <div class="grid gap-2 rounded border bg-gray-50 p-3 text-sm sm:grid-cols-4">
+                        <div><span class="block text-xs text-gray-500">Patient</span>{{ t1Summary.patient || '—' }}</div>
+                        <div><span class="block text-xs text-gray-500">Patient PIN</span>{{ t1Summary.pin || '—' }}</div>
+                        <div><span class="block text-xs text-gray-500">Case No.</span>{{ t1Summary.caseNo || '—' }}</div>
+                        <div><span class="block text-xs text-gray-500">Confinement</span>{{ t1Summary.period || '—' }}</div>
+                    </div>
+                </section>
+
+                <!-- CF-2 codes -->
+                <section class="space-y-3 border-t pt-5">
+                    <h2 class="text-lg font-semibold">CF-2 — Codes (pages 1 and 2)</h2>
+                    <div class="grid gap-3 sm:grid-cols-2">
+                        <label class="text-sm">Z-Benefit Package Code (item 8b)
+                            <input v-model="mhg2Form.form_data.z_benefit_code" placeholder="MHG02" class="mt-1 w-full rounded border p-2" />
+                        </label>
+                        <label class="text-sm">RVS / ICD code (items 7 and 9)
+                            <input v-model="mhg2Form.form_data.rvs_code" placeholder="MHG02" class="mt-1 w-full rounded border p-2" />
+                        </label>
+                    </div>
+                    <p class="text-xs text-gray-500">
+                        Item 7 rows that have an RVS code in Tranche 1, and item 9 when filled in Tranche 1, print this code.
+                    </p>
+                </section>
+
+                <!-- CF-2 CHARGES (MHG2) -->
+                <section class="space-y-3 border-t pt-5">
+                    <h2 class="text-lg font-semibold">CF-2 — Charges (page 3, Part III-A)</h2>
+                    <p class="rounded bg-blue-50 p-3 text-sm text-blue-800">
+                        MHG2 only, not copied from Tranche 1; empty fields stay blank on the form. The first box is always
+                        checked. Professional fees are always 0.00. Grand total equals the institution fees.
+                    </p>
+                    <div class="grid gap-3 sm:grid-cols-2">
+                        <label class="text-sm">Total health care institution fees
+                            <input v-model="mhg2Form.form_data.hci_charges" placeholder="e.g. 2925.00" class="mt-1 w-full rounded border p-2" />
+                        </label>
+                    </div>
+
+                    <h3 class="pt-2 text-sm font-semibold">Co-pay table, row 1 — Total Health Care Institution Fees</h3>
+                    <div class="grid gap-3 sm:grid-cols-2">
+                        <label class="text-sm">Total actual charges
+                            <input v-model="mhg2Form.form_data.copay_hci_actual" class="mt-1 w-full rounded border p-2" />
+                        </label>
+                        <label class="text-sm">Amount after application of discount
+                            <input v-model="mhg2Form.form_data.copay_hci_discount" class="mt-1 w-full rounded border p-2" />
+                        </label>
+                        <label class="text-sm">PhilHealth benefit
+                            <input v-model="mhg2Form.form_data.copay_hci_benefit" class="mt-1 w-full rounded border p-2" />
+                        </label>
+                        <label class="text-sm">Amount after PhilHealth deduction (Amount P)
+                            <input v-model="mhg2Form.form_data.copay_hci_amount" class="mt-1 w-full rounded border p-2" />
+                        </label>
+                    </div>
+                    <p class="text-xs text-gray-500">
+                        "Others" is checked on row 1 when any value is entered. Row 2 (Total Professional Fees) is then N/A.
+                    </p>
+                </section>
+
+                <!-- ANNEX C -->
+                <section class="space-y-3 border-t pt-5">
+                    <h2 class="text-lg font-semibold">Annex C — Mental Health Registry</h2>
+                    <p class="rounded bg-blue-50 p-3 text-sm text-blue-800">
+                        Leave a field empty to fill it automatically. Facility, address, PIN and sex come from Tranche 1.
+                        Diagnosis, diagnostics and medications run down the table rows: put one item per line (commas
+                        also split diagnostics and medications). Long items wrap onto the next row.
+                    </p>
+                    <div class="grid gap-3 sm:grid-cols-2">
+                        <label class="text-sm">Diagnosis (one per line)
+                            <textarea v-model="mhg2Form.form_data.c_diagnosis" rows="3" placeholder="auto: Tranche 1 admission diagnosis" class="mt-1 w-full rounded border p-2" />
+                        </label>
+                        <label class="text-sm">Diagnostics ordered (one per line)
+                            <textarea v-model="mhg2Form.form_data.c_diagnostics" rows="3" placeholder="auto: Annex J.1 tests, else N/A" class="mt-1 w-full rounded border p-2" />
+                        </label>
+                        <label class="text-sm">Medications given (one per line)
+                            <textarea v-model="mhg2Form.form_data.c_medications" rows="3" placeholder="auto: MHG2 Annex D medicines, else N/A" class="mt-1 w-full rounded border p-2" />
+                        </label>
+                        <label class="text-sm">Attending physician
+                            <input v-model="mhg2Form.form_data.c_physician" placeholder="auto: CF-2 page 3 professional" class="mt-1 w-full rounded border p-2" />
+                        </label>
+                    </div>
+                </section>
+
+                <!-- ANNEX D -->
+                <section class="space-y-3 border-t pt-5">
+                    <h2 class="text-lg font-semibold">Annex D — Mental Health Passport (MHG2)</h2>
+                    <p class="rounded bg-blue-50 p-3 text-sm text-blue-800">
+                        These follow-up visits and medicines are for MHG2 only. They are not copied from Tranche 1 and
+                        empty rows stay blank. Case No., facility, date of assessment, age, patient and member come from Tranche 1.
+                    </p>
+
+                    <h3 class="pt-2 text-sm font-semibold">A. Follow-up visits</h3>
+                    <div class="space-y-2">
+                        <div class="grid grid-cols-[2rem_1fr_1fr] gap-2 text-xs text-gray-500">
+                            <span></span><span>Date of visit</span><span>Date of next visit</span>
+                        </div>
+                        <div v-for="(row, i) in mhg2Form.form_data.d_follow_ups" :key="i" class="grid grid-cols-[2rem_1fr_1fr] items-center gap-2">
+                            <span class="text-sm text-gray-500">{{ i + 1 }}</span>
+                            <input v-model="row.visit" type="date" class="w-full rounded border p-2 text-sm" />
+                            <input v-model="row.next" type="date" class="w-full rounded border p-2 text-sm" />
+                        </div>
+                    </div>
+
+                    <h3 class="pt-2 text-sm font-semibold">B. Medications</h3>
+                    <div class="space-y-2">
+                        <div class="hidden gap-2 text-xs text-gray-500 sm:grid sm:grid-cols-4">
+                            <span>Name of medicine</span><span>Dosage</span><span>Preparation</span><span>Date given</span>
+                        </div>
+                        <div v-for="(row, i) in mhg2Form.form_data.d_medications" :key="i" class="grid gap-2 sm:grid-cols-4">
+                            <input v-model="row.name" :placeholder="`Medicine ${i + 1}`" class="w-full rounded border p-2 text-sm" />
+                            <input v-model="row.dosage" placeholder="Dosage" class="w-full rounded border p-2 text-sm" />
+                            <input v-model="row.preparation" placeholder="Preparation" class="w-full rounded border p-2 text-sm" />
+                            <input v-model="row.date" type="date" title="Date given" class="w-full rounded border p-2 text-sm" />
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ANNEX H -->
+                <section class="space-y-3 border-t pt-5">
+                    <div class="flex flex-wrap items-end justify-between gap-3">
+                        <h2 class="text-lg font-semibold">Annex H — Transmittal Form of Claims</h2>
+                        <button type="button" @click="addAnnexHRow" :disabled="mhg2Form.form_data.h_rows.length >= 5"
+                                class="rounded border px-3 py-1.5 text-sm disabled:opacity-50">
+                            + Add claim row
+                        </button>
+                    </div>
+                    <p class="rounded bg-blue-50 p-3 text-sm text-blue-800">
+                        Up to five rows, all printed on Annex H. Blank fields in row 1 use Tranche 1 (case no., patient PIN,
+                        date admitted / discharged). A row with an empty package code prints the default code below.
+                        Remarks print on one line, so keep them short.
+                    </p>
+                    <label class="block text-sm sm:w-1/2">Default package code
+                        <input v-model="mhg2Form.form_data.h_package_code" placeholder="MHG2" class="mt-1 w-full rounded border p-2" />
+                    </label>
+                    <div v-for="(row, index) in mhg2Form.form_data.h_rows" :key="index" class="space-y-2 rounded border p-3">
+                        <div class="flex items-center justify-between">
+                            <span class="text-sm font-medium">Claim row {{ index + 1 }}</span>
+                            <button v-if="mhg2Form.form_data.h_rows.length > 1" type="button" @click="removeAnnexHRow(index)"
+                                    class="text-sm text-red-700 underline">Remove</button>
+                        </div>
+                        <div class="grid gap-2 sm:grid-cols-3">
+                            <label class="block text-xs">Case number
+                                <input v-model="row.case_no" class="mt-1 w-full rounded border p-2 text-sm" />
+                            </label>
+                            <label class="block text-xs">Patient PIN
+                                <input v-model="row.patient_pin" maxlength="20" placeholder="12 digits" class="mt-1 w-full rounded border p-2 text-sm" />
+                            </label>
+                            <label class="block text-xs">Package code
+                                <input v-model="row.package_code" class="mt-1 w-full rounded border p-2 text-sm" />
+                            </label>
+                            <label class="block text-xs">Period of availment — from
+                                <input v-model="row.date_from" type="date" class="mt-1 w-full rounded border p-2 text-sm" />
+                            </label>
+                            <label class="block text-xs">Period of availment — to
+                                <input v-model="row.date_to" type="date" class="mt-1 w-full rounded border p-2 text-sm" />
+                            </label>
+                            <label class="block text-xs">Remarks
+                                <input v-model="row.remarks" maxlength="300" class="mt-1 w-full rounded border p-2 text-sm" />
+                            </label>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ANNEX J.2 -->
+                <section class="space-y-3 border-t pt-5">
+                    <h2 class="text-lg font-semibold">Annex J.2 — Checklist of Mandatory and Other Services (Tranche 2)</h2>
+                    <p class="rounded bg-blue-50 p-3 text-sm text-blue-800">
+                        Follow-up visits for psychoeducation and psychosocial support. Empty dates use the Tranche 1 Annex D
+                        visits 7 to 12. The box is ticked when any date is filled. Conforme and attending physician come from Tranche 1.
+                    </p>
+                    <div class="grid gap-2 sm:grid-cols-3">
+                        <label v-for="(_, i) in mhg2Form.form_data.j2_follow_ups" :key="i" class="text-sm">
+                            {{ i + 1 }}. Date
+                            <input v-model="mhg2Form.form_data.j2_follow_ups[i]" type="date" class="mt-1 w-full rounded border p-2 text-sm" />
+                        </label>
+                    </div>
+                </section>
+
+                <section class="space-y-1 border-t pt-5">
+                    <h2 class="text-lg font-semibold">Annex L.2 — Checklist of Requirements (Tranche 2)</h2>
+                    <p class="text-sm text-gray-500">Uses the Tranche 1 Annex L.1 ticks, attending physician and head of the health facility.</p>
+                </section>
+
+                <div v-if="Object.keys(mhg2Form.errors).length" class="space-y-1 text-sm text-red-600">
+                    <p>Please check the MHG2 fields and try again.</p>
+                    <p v-for="(msg, key) in mhg2Form.errors" :key="key" class="text-xs">{{ msg }}</p>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                    <button :disabled="mhg2Form.processing" class="rounded bg-emerald-700 px-5 py-2 font-semibold text-white disabled:opacity-50">
+                        {{ mhg2Form.processing ? 'Saving…' : 'Save MHG2' }}
+                    </button>
+                    <button type="button" @click="closeModal" class="rounded border px-5 py-2">Close</button>
+                </div>
+            </form>
+
+            <aside class="space-y-4 lg:sticky lg:top-0 lg:max-h-[calc(95vh-9rem)] lg:self-start lg:overflow-y-auto lg:pr-1">
                 <section v-if="previewUrl" class="space-y-3 rounded-xl border p-4">
-                    <h2 class="font-semibold">PDF preview</h2>
-                    <iframe :src="previewUrl" title="Mental health CSF, CF-2 and annexes PDF preview" class="w-full border" style="height: 65vh"></iframe>
-                    <a :href="previewUrl" target="_blank" class="inline-block rounded bg-gray-800 px-4 py-2 text-white">
+                    <div class="flex items-center justify-between">
+                        <h2 class="font-semibold">PDF preview{{ record?.mhg2 ? (tab === 'mhg2' ? ' — MHG2' : ' — Tranche 1') : '' }}</h2>
+                        <div v-if="record?.mhg2" class="flex gap-1 text-sm">
+                            <button type="button" @click="tab = 'main'"
+                                    :class="tab === 'main' ? 'bg-gray-800 text-white' : 'border'" class="rounded px-3 py-1">Tranche 1</button>
+                            <button type="button" @click="tab = 'mhg2'"
+                                    :class="tab === 'mhg2' ? 'bg-emerald-700 text-white' : 'border'" class="rounded px-3 py-1">MHG2</button>
+                        </div>
+                    </div>
+                    <iframe :key="activePreview" :src="activePreview" title="Mental health CSF, CF-2 and annexes PDF preview" class="w-full border" style="height: 65vh"></iframe>
+                    <a :href="activePreview" target="_blank" class="inline-block rounded bg-gray-800 px-4 py-2 text-white">
                         Open PDF to print
                     </a>
                 </section>

@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\PdfRecordController;
 use App\Http\Controllers\MentalPdfRecordController;
+use App\Http\Controllers\MentalPdfMhg2Controller;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', fn () => redirect()->route('pdf-records.index'));
@@ -20,3 +21,8 @@ Route::post('/mental-pdf-records', [MentalPdfRecordController::class, 'store'])-
 Route::get('/mental-pdf-records/{record}/edit', [MentalPdfRecordController::class, 'edit'])->name('mental-pdf-records.edit');
 Route::put('/mental-pdf-records/{record}', [MentalPdfRecordController::class, 'update'])->name('mental-pdf-records.update');
 Route::get('/mental-pdf-records/{record}/preview', [MentalPdfRecordController::class, 'preview'])->name('mental-pdf-records.preview');
+
+
+Route::post('mental-pdf-records/{record}/mhg2', [MentalPdfMhg2Controller::class, 'store'])->name('mental-pdf-records.mhg2.store');
+Route::put('mental-pdf-records/{record}/mhg2', [MentalPdfMhg2Controller::class, 'update'])->name('mental-pdf-records.mhg2.update');
+Route::get('mental-pdf-records/{record}/mhg2/preview', [MentalPdfMhg2Controller::class, 'preview'])->name('mental-pdf-records.mhg2.preview');

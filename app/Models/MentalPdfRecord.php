@@ -15,4 +15,9 @@ class MentalPdfRecord extends Model
     protected $casts = [
         'form_data' => 'array',
     ];
+
+    public function mhg2(): \Illuminate\Database\Eloquent\Relations\HasOne
+    {
+        return $this->hasOne(MentalPdfMhg2::class);
+    }
 }
